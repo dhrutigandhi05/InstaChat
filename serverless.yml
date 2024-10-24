@@ -10,18 +10,33 @@ provider:
 
 functions:
    websocketHandler:
-    handler: src/handlers.hello
+    handler: src/handler.handle
     events:
       - websocket:
-          route: $connect
+          route: $connect # when user connects
       - websocket:
-          route: $disconnect
+          route: $disconnect # when user disconnects
       - websocket:
-          route: getMessages
+          route: getMessages 
       - websocket:
           route: sendMessage
-      - websocket: getClients
+      - websocket: 
+          route: getClients
 
 plugins:
   - serverless-plugin-typescript
 
+resources:
+  Resources:
+    ClientsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: Clients
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        AttributeDefinitions:
+          - AttributeName: connectionId
+            AttributeType: S
+          - AttributeName: nickname
+            AttributeType: S
