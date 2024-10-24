@@ -1,0 +1,27 @@
+# "org" ensures this Service is used with the correct Serverless Framework Access Key.
+org: dhrutigandhi
+# "service" is the name of this project. This will also be added to your AWS resource names.
+service: InstaChat
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  lambdaHashingVersion: 20201221
+
+functions:
+   websocketHandler:
+    handler: src/handlers.hello
+    events:
+      - websocket:
+          route: $connect
+      - websocket:
+          route: $disconnect
+      - websocket:
+          route: getMessages
+      - websocket:
+          route: sendMessage
+      - websocket: getClients
+
+plugins:
+  - serverless-plugin-typescript
+
