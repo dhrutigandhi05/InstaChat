@@ -2,7 +2,12 @@ import { APIGatewayProxyEvent, APIGatewayProxyEventQueryStringParameters, APIGat
 import AWS, { AWSError } from "aws-sdk";
 import { connect } from "http2";
 
+// websocket actions
 type Action = "$connect" | "$disconnect" | "getMessage" | "sendMessage" | "getClients";
+type Client = {
+  connectionId: string
+  nickname: string
+}
 
 const clientTableName = "Clients";
 const response = {
@@ -14,6 +19,7 @@ const apiGateway = new AWS.ApiGatewayManagementApi({
   endpoint: process.env["WSSAPIGATEWAYENDPOINT"],
 });
 
+// function handles websocket events
 export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   const connectionId = event.requestContext.connectionId as string
   const routeKey = event.requestContext.routeKey as Action;
@@ -37,10 +43,12 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
   }
 };
 
+// handles new websocket connection
 const handleConnection = async(
   connectionId: string, 
   queryParams: APIGatewayProxyEventQueryStringParameters | null,
-): Promise<APIGatewayProxyResult> => {
+  ): Promise<APIGatewayProxyResult> => {
+  // connection has to have a nickname
   if (!queryParams || !queryParams["nickname"]) {
     return {
         statusCode: 403,
@@ -48,7 +56,7 @@ const handleConnection = async(
     };
   }
 
-  // creates new user
+  // saves new user connection and nickname in the table
   await docClient.put({
     TableName: clientTableName,
     Item: {
@@ -58,12 +66,12 @@ const handleConnection = async(
   })
   .promise();
 
-  
-
   return response;
 };
 
+// handles websocket disconnection
 const handleDisconnection = async(connectionId: string): Promise<APIGatewayProxyResult> => {
+  // deletes connection from the table
   await docClient.delete({
     TableName: clientTableName,
     Key: {
@@ -75,29 +83,53 @@ const handleDisconnection = async(connectionId: string): Promise<APIGatewayProxy
   return response;
 };
 
-const notifyAllClients = async (connectionIdToExclude: string) => {
-  
-}
+const notifyClients = async(connectionIdToExclude: string) => {
+  const clients = await getClients();
 
-const handleGetClients = async (connectionId: string): Promise<APIGatewayProxyResult> => {
+  // filters clients from client[] that has the connectionIdToExclude
+  await Promise.all(
+    clients
+      .filter((client) => client.connectionId !== connectionIdToExclude)
+      .map(async (client) => {
+        await postToConnection(client.connectionId, JSON.stringify(clients));
+      }),
+  );
+
+  // for (const client of clients) {
+  //   if (client.connectionId === connectionIdToExclude){
+  //     continue;
+  //   }
+
+  //   await postToConnection(client.connectionId, JSON.stringify(clients));
+  // }
+};
+
+// gets all the clients from the table
+const getClients = async(): Promise<Client[]> => {
   const output = await docClient.scan({
     TableName: clientTableName,
   })
   .promise();
 
   const clients = output.Items || [];
+  return clients as Client[]
+}
 
+const postToConnection = async(connectionId: string, info: string) => {
   try {
+    // get list of connected clients then send that list to websocket client
     await apiGateway.postToConnection({
       ConnectionId: connectionId,
-      Data: JSON.stringify(clients),
+      Data: info,
     })
     .promise();
   } catch (e) {
+    // handle errors
     if ((e as AWSError).statusCode !== 410) {
       throw e
     }
 
+    // delete client from the table if its no long available
     await docClient.delete({
       TableName: clientTableName,
       Key: {
@@ -106,6 +138,11 @@ const handleGetClients = async (connectionId: string): Promise<APIGatewayProxyRe
     })
     .promise();
   }
+}
 
+const handleGetClients = async (connectionId: string): Promise<APIGatewayProxyResult> => {
+  // get all clients
+  const clients = await getClients();
+  await postToConnection(connectionId, JSON.stringify(clients));
   return response;
 };
