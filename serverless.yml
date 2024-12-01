@@ -7,52 +7,52 @@ provider:
   runtime: nodejs20.x
   lambdaHashingVersion: 20201221
 
-environment:
-  WSSAPIGATEWAYENDPOINT:
-    Fn::Join:
-      - ""
-      - - Ref: WebsocketsApi
-        - ".execute-api."
-        - Ref: AWS::Region
-        - ".amazonaws.com/${sls:stage}"
+  environment:
+    WSSAPIGATEWAYENDPOINT:
+      Fn::Join:
+        - ""
+        - - Ref: WebsocketsApi
+          - ".execute-api."
+          - Ref: AWS::Region
+          - ".amazonaws.com/${sls:stage}"
 
-iam:
-  role:
-    statements:
-      - Effect: Allow
-        Action:
-          - "dynamodb:PutItem"
-          - "dynamodb:GetItem"
-          - "dynamodb:DeleteItem"
-          - "dynamodb:Scan"
-        Resource:
-          - {"Fn::GetAtt": ["ClientsTable", "Arn"]}
-      - Effect: Allow
-        Action:
-          - "dynamodb:Query"
-        Resource:
-          Fn::Join:
-            - "/"
-            - - {"Fn::GetAtt": ["ClientsTable", "Arn"]}
-              - "index"
-              - "*"
-      - Effect: Allow
-        Action:
-          - "dynamodb:PutItem"
-          - "dynamodb:GetItem"
-          - "dynamodb:DeleteItem"
-          - "dynamodb:Scan"
-        Resource:
-          - {"Fn::GetAtt": ["MessagesTable", "Arn"]}
-      - Effect: Allow
-        Action:
-          - "dynamodb:Query"
-        Resource:
-          Fn::Join:
-            - "/"
-            - - {"Fn::GetAtt": ["MessagesTable", "Arn"]}
-              - "index"
-              - "*"
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - "dynamodb:PutItem"
+            - "dynamodb:GetItem"
+            - "dynamodb:DeleteItem"
+            - "dynamodb:Scan"
+          Resource:
+            - {"Fn::GetAtt": ["ClientsTable", "Arn"]}
+        - Effect: Allow
+          Action:
+            - "dynamodb:Query"
+          Resource:
+            Fn::Join:
+              - "/"
+              - - {"Fn::GetAtt": ["ClientsTable", "Arn"]}
+                - "index"
+                - "*"
+        - Effect: Allow
+          Action:
+            - "dynamodb:PutItem"
+            - "dynamodb:GetItem"
+            - "dynamodb:DeleteItem"
+            - "dynamodb:Scan"
+          Resource:
+            - {"Fn::GetAtt": ["MessagesTable", "Arn"]}
+        - Effect: Allow
+          Action:
+            - "dynamodb:Query"
+          Resource:
+            Fn::Join:
+              - "/"
+              - - {"Fn::GetAtt": ["MessagesTable", "Arn"]}
+                - "index"
+                - "*"
 
 
 functions:
@@ -70,8 +70,8 @@ functions:
       - websocket: 
           route: getClients
 
-plugins:
-  - serverless-plugin-typescript
+#plugins:
+#  - serverless-plugin-typescript
 
 resources:
   Resources:

@@ -7,13 +7,19 @@ type Action = "$connect" | "$disconnect" | "getMessage" | "sendMessage" | "getCl
 type Client = {
   connectionId: string
   nickname: string
-}
+};
 
 const clientTableName = "Clients";
 const response = {
   statusCode: 200,
   body: "",
-}
+};
+
+const error403 = {
+  statusCode: 403,
+  body: "",
+};
+
 const docClient = new AWS.DynamoDB.DocumentClient();
 const apiGateway = new AWS.ApiGatewayManagementApi({
   endpoint: process.env["WSSAPIGATEWAYENDPOINT"],
@@ -31,10 +37,9 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
       return handleDisconnection(connectionId);
     case "getMessage":
       //return handleGetMessage(connectionId);
-    case "sendMessage":
+    //case "sendMessage":
     case "getClients":
       return handleGetClients(connectionId);
-
     default:
       return {
         statusCode: 500,
@@ -47,24 +52,43 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
 const handleConnection = async(
   connectionId: string, 
   queryParams: APIGatewayProxyEventQueryStringParameters | null,
-  ): Promise<APIGatewayProxyResult> => {
+): Promise<APIGatewayProxyResult> => {
   // connection has to have a nickname
   if (!queryParams || !queryParams["nickname"]) {
-    return {
-        statusCode: 403,
-        body: "",
-    };
+    return error403;
+  }
+
+  const out = await docClient.query({
+    TableName: clientTableName,
+    IndexName: "NicknameIndex",
+    KeyConditionExpression: "#nickname = :nickname",
+    ExpressionAttributeNames: {
+      '#nickname': 'nickname'
+    },
+    ExpressionAttributeValues: {
+      ":nickname": queryParams['nickname']
+    },
+  }).promise();
+
+  if (out.Count && out.Count > 0) {
+    const client = (out.Items as Client[])[0];
+
+    if (await postToConnection(client.connectionId, JSON.stringify({type: "ping"}))) {
+      return error403;
+    }
   }
 
   // saves new user connection and nickname in the table
   await docClient.put({
-    TableName: clientTableName,
-    Item: {
-      connectionId, 
-      nickname: queryParams["nickname"],
-    },
-  })
-  .promise();
+      TableName: clientTableName,
+      Item: {
+        connectionId, 
+        nickname: queryParams["nickname"],
+      },
+    }).promise();
+
+  // notify all other clients that user has connected
+  await notifyClients(connectionId);
 
   return response;
 };
@@ -77,8 +101,10 @@ const handleDisconnection = async(connectionId: string): Promise<APIGatewayProxy
     Key: {
       connectionId,
     },
-  })
-  .promise();
+  }).promise();
+
+  // notify all other clients that user has connected
+  await notifyClients(connectionId);
 
   return response;
 };
@@ -91,7 +117,7 @@ const notifyClients = async(connectionIdToExclude: string) => {
     clients
       .filter((client) => client.connectionId !== connectionIdToExclude)
       .map(async (client) => {
-        await postToConnection(client.connectionId, JSON.stringify(clients));
+        await postToConnection(client.connectionId, clientMessage(clients));
       }),
   );
 
@@ -112,10 +138,10 @@ const getClients = async(): Promise<Client[]> => {
   .promise();
 
   const clients = output.Items || [];
-  return clients as Client[]
-}
+  return clients as Client[];
+};
 
-const postToConnection = async(connectionId: string, info: string) => {
+const postToConnection = async(connectionId: string, info: string): Promise<boolean> => {
   try {
     // get list of connected clients then send that list to websocket client
     await apiGateway.postToConnection({
@@ -123,26 +149,30 @@ const postToConnection = async(connectionId: string, info: string) => {
       Data: info,
     })
     .promise();
+    return true
   } catch (e) {
     // handle errors
     if ((e as AWSError).statusCode !== 410) {
-      throw e
+      throw e;
     }
 
     // delete client from the table if its no long available
     await docClient.delete({
-      TableName: clientTableName,
-      Key: {
-        connectionId,
-      },
-    })
-    .promise();
+        TableName: clientTableName,
+        Key: {
+          connectionId,
+        },
+      })
+      .promise();
+    return false;
   }
-}
+};
 
 const handleGetClients = async (connectionId: string): Promise<APIGatewayProxyResult> => {
   // get all clients
   const clients = await getClients();
-  await postToConnection(connectionId, JSON.stringify(clients));
+  await postToConnection(connectionId, clientMessage(clients));
   return response;
 };
+
+const clientMessage = (clients: Client[]): string => JSON.stringify({type: "clients", value: {clients}});
