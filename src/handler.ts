@@ -168,8 +168,7 @@ const notifyClients = async(connectionIdToExclude: string) => {
 const getClients = async(): Promise<Client[]> => {
   const output = await docClient.scan({
     TableName: clientTableName,
-  })
-  .promise();
+  }).promise();
 
   const clients = output.Items || [];
   return clients as Client[];
@@ -181,8 +180,7 @@ const postToConnection = async(connectionId: string, info: string): Promise<bool
     await apiGateway.postToConnection({
       ConnectionId: connectionId,
       Data: info,
-    })
-    .promise();
+    }).promise();
     return true
   } catch (e) {
     // handle errors
