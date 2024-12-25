@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyEventQueryStringParameters, APIGatewayProxyResult } from "aws-lambda";
 import AWS, { AWSError } from "aws-sdk";
-import { connect } from "http2";
+import { v4 } from "uuid";
 
 // websocket actions
 type Action = "$connect" | "$disconnect" | "getMessage" | "sendMessage" | "getClients";
@@ -9,7 +9,15 @@ type Client = {
   nickname: string
 };
 
+type messageBody = {
+  message: string
+  receiver: string
+};
+
 const clientTableName = "Clients";
+
+class errors extends Error {}
+
 const response = {
   statusCode: 200,
   body: "",
@@ -20,6 +28,8 @@ const error403 = {
   body: "",
 };
 
+
+
 const docClient = new AWS.DynamoDB.DocumentClient();
 const apiGateway = new AWS.ApiGatewayManagementApi({
   endpoint: process.env["WSSAPIGATEWAYENDPOINT"],
@@ -29,15 +39,18 @@ const apiGateway = new AWS.ApiGatewayManagementApi({
 export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   const connectionId = event.requestContext.connectionId as string
   const routeKey = event.requestContext.routeKey as Action;
-
-  switch (routeKey) {
+  
+  try {
+    switch (routeKey) {
     case "$connect":
       return handleConnection(connectionId, event.queryStringParameters);
     case "$disconnect":
       return handleDisconnection(connectionId);
+    case "sendMessage":
+      //const body = parseMessage(event.body)
+      return handleSendMessage(connectionId, parseMessage(event.body));
     case "getMessage":
       //return handleGetMessage(connectionId);
-    //case "sendMessage":
     case "getClients":
       return handleGetClients(connectionId);
     default:
@@ -45,39 +58,39 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
         statusCode: 500,
         body: "",
       };
+    }
+  } catch (e) {
+    if (e instanceof errors) {
+      await postToConnection(connectionId, e.message);
+      return response;
+    }
+
+    throw e;
   }
 };
 
+const parseMessage = (body: string | null): messageBody => {
+  const messageBody = JSON.parse(body || "{}") as messageBody
+
+  if (!messageBody || typeof messageBody.message !== 'string' || typeof messageBody.receiver !== 'string') {
+    throw new errors('Invalid SM Body Type');
+  }
+
+  return messageBody
+}
+
 // handles new websocket connection
-const handleConnection = async(
-  connectionId: string, 
-  queryParams: APIGatewayProxyEventQueryStringParameters | null,
-): Promise<APIGatewayProxyResult> => {
+const handleConnection = async(connectionId: string, queryParams: APIGatewayProxyEventQueryStringParameters | null,): Promise<APIGatewayProxyResult> => {
   // connection has to have a nickname
   if (!queryParams || !queryParams["nickname"]) {
     return error403;
   }
-
-  const out = await docClient.query({
-    TableName: clientTableName,
-    IndexName: "NicknameIndex",
-    KeyConditionExpression: "#nickname = :nickname",
-    ExpressionAttributeNames: {
-      '#nickname': 'nickname'
-    },
-    ExpressionAttributeValues: {
-      ":nickname": queryParams['nickname']
-    },
-  }).promise();
-
-  if (out.Count && out.Count > 0) {
-    const client = (out.Items as Client[])[0];
-
-    if (await postToConnection(client.connectionId, JSON.stringify({type: "ping"}))) {
-      return error403;
-    }
+  
+  const connectId = await getConnectionId(queryParams["nickname"]);
+  if (connectId && await postToConnection(connectId, JSON.stringify({type: "ping"}))) {
+    return error403;
   }
-
+  
   // saves new user connection and nickname in the table
   await docClient.put({
       TableName: clientTableName,
@@ -92,6 +105,27 @@ const handleConnection = async(
 
   return response;
 };
+
+const getConnectionId = async (nickname: string): Promise<string | undefined> => {
+  const out = await docClient.query({
+    TableName: clientTableName,
+    IndexName: "NicknameIndex",
+    KeyConditionExpression: "#nickname = :nickname",
+    ExpressionAttributeNames: {
+      '#nickname': 'nickname'
+    },
+    ExpressionAttributeValues: {
+      ":nickname": nickname,
+    },
+  }).promise();
+
+  if (out.Count && out.Count > 0) {
+    const client = (out.Items as Client[])[0];
+    return client.connectionId;
+  }
+
+  return undefined;
+}
 
 // handles websocket disconnection
 const handleDisconnection = async(connectionId: string): Promise<APIGatewayProxyResult> => {
@@ -176,3 +210,42 @@ const handleGetClients = async (connectionId: string): Promise<APIGatewayProxyRe
 };
 
 const clientMessage = (clients: Client[]): string => JSON.stringify({type: "clients", value: {clients}});
+
+// create message and save in message table
+// send message to the person getting the message (receiver)
+const handleSendMessage = async (senderId: string, body: messageBody): Promise<APIGatewayProxyResult> => {
+  const output = await docClient.get({
+    TableName: clientTableName,
+    Key: {
+      connectionId: senderId
+    }
+  }).promise();
+
+  const sender = output.Item as Client;
+  const nicknameToNickname = [sender.nickname, body.receiver].sort().join("#");
+  
+  await docClient.put({
+    TableName: "Messages",
+    Item: {
+      messageId: v4(), //v4 creates a random unique hash value
+      createdAt: new Date().getTime(),
+      nicknameToNickname: nicknameToNickname,
+      message: body.message,
+      sender: sender.nickname,
+    }
+  }).promise();
+
+  const receiverConnectionId = await getConnectionId(body.receiver);
+  
+  if (receiverConnectionId) {
+    await postToConnection(receiverConnectionId, JSON.stringify({
+      type: 'message',
+      value: {
+        sender: sender.nickname,
+        message: body.message,
+      },
+    }));
+  }
+
+  return response;
+};
