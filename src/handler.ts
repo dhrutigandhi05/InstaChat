@@ -1,20 +1,28 @@
 import { APIGatewayProxyEvent, APIGatewayProxyEventQueryStringParameters, APIGatewayProxyResult } from "aws-lambda";
 import AWS, { AWSError } from "aws-sdk";
+import { Key } from "aws-sdk/clients/dynamodb";
 import { v4 } from "uuid";
 
 // websocket actions
 type Action = "$connect" | "$disconnect" | "getMessage" | "sendMessage" | "getClients";
 type Client = {
-  connectionId: string
-  nickname: string
+  connectionId: string;
+  nickname: string;
 };
 
-type messageBody = {
-  message: string
-  receiver: string
+type SMessageBody = {
+  message: string;
+  receiver: string;
 };
+
+type GMessageBody = {
+  targetName: string;
+  limit: number;
+  startKey: Key | undefined;
+}
 
 const clientTableName = "Clients";
+const messageTableName = "Messages";
 
 class errors extends Error {}
 
@@ -45,10 +53,9 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
     case "$disconnect":
       return handleDisconnection(connectionId);
     case "sendMessage":
-      //const body = parseMessage(event.body)
-      return handleSendMessage(connectionId, parseMessage(event.body));
+      return handleSendMessage(connectionId, parseSMessage(event.body));
     case "getMessage":
-      //return handleGetMessage(connectionId);
+      return handleGetMessage(connectionId, parseGMessage(event.body));
     case "getClients":
       return handleGetClients(connectionId);
     default:
@@ -67,17 +74,29 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
   }
 };
 
-// parse mesage body
-const parseMessage = (body: string | null): messageBody => {
-  const messageBody = JSON.parse(body || "{}") as messageBody;
+// parse send message body
+const parseSMessage = (body: string | null): SMessageBody => {
+  const smessageBody = JSON.parse(body || "{}") as SMessageBody;
 
   // verify the structure of the message body
-  if (!messageBody || typeof messageBody.message !== 'string' || typeof messageBody.receiver !== 'string') {
+  if (!smessageBody || typeof smessageBody.message !== 'string' || typeof smessageBody.receiver !== 'string') {
     throw new errors('Invalid SM Body Type');
   }
 
-  return messageBody;
+  return smessageBody;
 }
+
+// parse get message body
+const parseGMessage = (body: string | null): GMessageBody => {
+  const gmessageBody = JSON.parse(body || "{}") as GMessageBody;
+
+  // verify the structure of the message body
+  if (!gmessageBody || typeof gmessageBody.targetName !== 'string' || typeof gmessageBody.limit !== 'number') {
+    throw new errors('Invalid GM Body Type');
+  }
+
+  return gmessageBody;
+};
 
 // handles new websocket connection
 const handleConnection = async(connectionId: string, queryParams: APIGatewayProxyEventQueryStringParameters | null,): Promise<APIGatewayProxyResult> => {
@@ -212,21 +231,14 @@ const clientMessage = (clients: Client[]): string => JSON.stringify({type: "clie
 
 // create message and save in message table
 // send message to the person getting the message (receiver)
-const handleSendMessage = async (senderId: string, body: messageBody): Promise<APIGatewayProxyResult> => {
+const handleSendMessage = async (senderId: string, body: SMessageBody): Promise<APIGatewayProxyResult> => {
   // get sender info
-  const output = await docClient.get({
-    TableName: clientTableName,
-    Key: {
-      connectionId: senderId
-    }
-  }).promise();
-
-  const sender = output.Item as Client;
-  const nicknameToNickname = [sender.nickname, body.receiver].sort().join("#");
+  const sender = await getClient(senderId);
+  const nicknameToNickname = getNnToNn([sender.nickname, body.receiver]);
   
   // stores message in the message table
   await docClient.put({
-    TableName: "Messages",
+    TableName: messageTableName,
     Item: {
       messageId: v4(), //v4 creates a random unique hash value
       createdAt: new Date().getTime(),
@@ -251,3 +263,47 @@ const handleSendMessage = async (senderId: string, body: messageBody): Promise<A
 
   return response;
 };
+
+const getClient = async (connectionId: string) => {
+  const output = await docClient.get({
+    TableName: clientTableName,
+    Key: {
+      connectionId,
+    },
+  }).promise();
+
+  return output.Item as Client;
+};
+
+const getNnToNn = (nicknames: string[]): string => nicknames.sort().join("#")
+
+const handleGetMessage = async (connectionId: string, body: GMessageBody): Promise<APIGatewayProxyResult> => {
+  const client = await getClient(connectionId);
+  const nicknameToNickname = getNnToNn([client.nickname, body.targetName]);
+  
+  const output = await docClient.query({
+    TableName: messageTableName,
+    IndexName: "NicknameToNicknameIndex",
+    KeyConditionExpression: "#nicknameToNickname = :nicknameToNickname",
+    ExpressionAttributeNames: {
+      '#nicknameToNickname': 'nicknameToNickname'
+    },
+    ExpressionAttributeValues: {
+      ":nicknameToNickname": nicknameToNickname,
+    },
+    Limit: body.limit,
+    ExclusiveStartKey: body.startKey,
+    ScanIndexForward: false,
+  }).promise();
+
+  const messages = output.Items && output.Items.length > 0 ? output.Items : [];
+
+  await postToConnection(connectionId, JSON.stringify({
+    type: 'messages',
+    value: {
+      messages,
+    },
+  }));
+  
+  return response;
+}
