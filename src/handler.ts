@@ -28,8 +28,6 @@ const error403 = {
   body: "",
 };
 
-
-
 const docClient = new AWS.DynamoDB.DocumentClient();
 const apiGateway = new AWS.ApiGatewayManagementApi({
   endpoint: process.env["WSSAPIGATEWAYENDPOINT"],
@@ -69,14 +67,16 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
   }
 };
 
+// parse mesage body
 const parseMessage = (body: string | null): messageBody => {
-  const messageBody = JSON.parse(body || "{}") as messageBody
+  const messageBody = JSON.parse(body || "{}") as messageBody;
 
+  // verify the structure of the message body
   if (!messageBody || typeof messageBody.message !== 'string' || typeof messageBody.receiver !== 'string') {
     throw new errors('Invalid SM Body Type');
   }
 
-  return messageBody
+  return messageBody;
 }
 
 // handles new websocket connection
@@ -137,12 +137,13 @@ const handleDisconnection = async(connectionId: string): Promise<APIGatewayProxy
     },
   }).promise();
 
-  // notify all other clients that user has connected
+  // notify all other clients that user has disconnected
   await notifyClients(connectionId);
 
   return response;
 };
 
+// notify all connected users if a new user has connected or disconnected
 const notifyClients = async(connectionIdToExclude: string) => {
   const clients = await getClients();
 
@@ -212,6 +213,7 @@ const clientMessage = (clients: Client[]): string => JSON.stringify({type: "clie
 // create message and save in message table
 // send message to the person getting the message (receiver)
 const handleSendMessage = async (senderId: string, body: messageBody): Promise<APIGatewayProxyResult> => {
+  // get sender info
   const output = await docClient.get({
     TableName: clientTableName,
     Key: {
@@ -222,6 +224,7 @@ const handleSendMessage = async (senderId: string, body: messageBody): Promise<A
   const sender = output.Item as Client;
   const nicknameToNickname = [sender.nickname, body.receiver].sort().join("#");
   
+  // stores message in the message table
   await docClient.put({
     TableName: "Messages",
     Item: {
@@ -235,6 +238,7 @@ const handleSendMessage = async (senderId: string, body: messageBody): Promise<A
 
   const receiverConnectionId = await getConnectionId(body.receiver);
   
+  // send message to reciever if connected
   if (receiverConnectionId) {
     await postToConnection(receiverConnectionId, JSON.stringify({
       type: 'message',
