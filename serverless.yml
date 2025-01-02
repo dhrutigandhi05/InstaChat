@@ -64,7 +64,7 @@ functions:
       - websocket:
           route: $disconnect # when user disconnects
       - websocket:
-          route: getMessages 
+          route: getMessage 
       - websocket:
           route: sendMessage
       - websocket: 

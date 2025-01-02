@@ -55,7 +55,7 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
     case "sendMessage":
       return handleSendMessage(connectionId, parseSMessage(event.body));
     case "getMessage":
-      return handleGetMessage(connectionId, parseGMessage(event.body));
+      return handleGetMessage(await getClient(connectionId),parseGMessage(event.body));
     case "getClients":
       return handleGetClients(connectionId);
     default:
@@ -66,7 +66,7 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
     }
   } catch (e) {
     if (e instanceof errors) {
-      await postToConnection(connectionId, e.message);
+      await postToConnection(connectionId, JSON.stringify({type: 'error', message: e.message}));
       return response;
     }
 
@@ -80,7 +80,7 @@ const parseSMessage = (body: string | null): SMessageBody => {
 
   // verify the structure of the message body
   if (!smessageBody || typeof smessageBody.message !== 'string' || typeof smessageBody.receiver !== 'string') {
-    throw new errors('Invalid SM Body Type');
+    throw new errors("Invalid SM Body Type");
   }
 
   return smessageBody;
@@ -91,8 +91,8 @@ const parseGMessage = (body: string | null): GMessageBody => {
   const gmessageBody = JSON.parse(body || "{}") as GMessageBody;
 
   // verify the structure of the message body
-  if (!gmessageBody || typeof gmessageBody.targetName !== 'string' || typeof gmessageBody.limit !== 'number') {
-    throw new errors('Invalid GM Body Type');
+  if (!gmessageBody || typeof gmessageBody.targetName !== "string" || typeof gmessageBody.limit !== "number") {
+    throw new errors("Invalid GM Body Type");
   }
 
   return gmessageBody;
@@ -277,33 +277,34 @@ const getClient = async (connectionId: string) => {
 
 const getNnToNn = (nicknames: string[]): string => nicknames.sort().join("#")
 
-const handleGetMessage = async (connectionId: string, body: GMessageBody): Promise<APIGatewayProxyResult> => {
-  const client = await getClient(connectionId);
-  const nicknameToNickname = getNnToNn([client.nickname, body.targetName]);
-  
-  const output = await docClient.query({
-    TableName: messageTableName,
-    IndexName: "NicknameToNicknameIndex",
-    KeyConditionExpression: "#nicknameToNickname = :nicknameToNickname",
-    ExpressionAttributeNames: {
-      '#nicknameToNickname': 'nicknameToNickname'
-    },
-    ExpressionAttributeValues: {
-      ":nicknameToNickname": nicknameToNickname,
-    },
-    Limit: body.limit,
-    ExclusiveStartKey: body.startKey,
-    ScanIndexForward: false,
-  }).promise();
+const handleGetMessage = async (client: Client, body: GMessageBody) => {
+  const output = await docClient
+    .query({
+      TableName: messageTableName,
+      IndexName: "NicknameToNicknameIndex",
+      KeyConditionExpression: "#nicknameToNickname = :nicknameToNickname",
+      ExpressionAttributeNames: {
+        "#nicknameToNickname": "nicknameToNickname",
+      },
+      ExpressionAttributeValues: {
+        ":nicknameToNickname": getNnToNn([client.nickname, body.targetName]),
+      },
+      Limit: body.limit,
+      ExclusiveStartKey: body.startKey,
+      ScanIndexForward: false,
+    })
+    .promise();
 
-  const messages = output.Items && output.Items.length > 0 ? output.Items : [];
+  await postToConnection(
+    client.connectionId,
+    JSON.stringify({
+      type: "messages",
+      value: {
+        messages: output.Items && output.Items.length > 0 ? output.Items : [],
+        lastEvaluatedKey: output.LastEvaluatedKey,
+      },
+    }),
+  );
 
-  await postToConnection(connectionId, JSON.stringify({
-    type: 'messages',
-    value: {
-      messages,
-    },
-  }));
-  
   return response;
-}
+};
