@@ -16,7 +16,7 @@ type SMessageBody = {
 };
 
 type GMessageBody = {
-  targetName: string;
+  targetNickname: string;
   limit: number;
   startKey: Key | undefined;
 }
@@ -43,7 +43,7 @@ const apiGateway = new AWS.ApiGatewayManagementApi({
 
 // function handles websocket events
 export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-  const connectionId = event.requestContext.connectionId as string
+  const connectionId = event.requestContext.connectionId as string;
   const routeKey = event.requestContext.routeKey as Action;
   
   try {
@@ -55,7 +55,7 @@ export const handle = async (event: APIGatewayProxyEvent): Promise<APIGatewayPro
     case "sendMessage":
       return handleSendMessage(connectionId, parseSMessage(event.body));
     case "getMessage":
-      return handleGetMessage(await getClient(connectionId),parseGMessage(event.body));
+      return handleGetMessage(await getClient(connectionId), parseGMessage(event.body));
     case "getClients":
       return handleGetClients(connectionId);
     default:
@@ -91,7 +91,7 @@ const parseGMessage = (body: string | null): GMessageBody => {
   const gmessageBody = JSON.parse(body || "{}") as GMessageBody;
 
   // verify the structure of the message body
-  if (!gmessageBody || typeof gmessageBody.targetName !== "string" || typeof gmessageBody.limit !== "number") {
+  if (!gmessageBody || typeof gmessageBody.targetNickname !== "string" || typeof gmessageBody.limit !== "number") {
     throw new errors("Invalid GM Body Type");
   }
 
@@ -287,7 +287,7 @@ const handleGetMessage = async (client: Client, body: GMessageBody) => {
         "#nicknameToNickname": "nicknameToNickname",
       },
       ExpressionAttributeValues: {
-        ":nicknameToNickname": getNnToNn([client.nickname, body.targetName]),
+        ":nicknameToNickname": getNnToNn([client.nickname, body.targetNickname]),
       },
       Limit: body.limit,
       ExclusiveStartKey: body.startKey,
