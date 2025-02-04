@@ -245,7 +245,7 @@ const handleSendMessage = async (senderId: string, body: SMessageBody): Promise<
       nicknameToNickname: nicknameToNickname,
       message: body.message,
       sender: sender.nickname,
-    }
+    },
   }).promise();
 
   const receiverConnectionId = await getConnectionId(body.receiver);
